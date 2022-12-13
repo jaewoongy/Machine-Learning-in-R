@@ -1,8 +1,6 @@
-Final Project 131
+Final Project 131 Knitted RMD File
 ================
 2022-11-27
-
-# Knitted RMD File
 
 # <span style="color:blue">Question 1:</span>
 
