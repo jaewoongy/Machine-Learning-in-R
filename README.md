@@ -2,6 +2,8 @@ Final Project 131
 ================
 2022-11-27
 
+# Knitted RMD File
+
 # <span style="color:blue">Question 1:</span>
 
 #### Dimensions of election.raw:
