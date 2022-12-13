@@ -1,0 +1,871 @@
+---
+title: "Final Project 131"
+output:
+  pdf_document: default
+  html_document: default
+date: "2022-11-27"
+---
+```{r, echo = F, message = F, warning = F}
+library(reshape2)
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+library(dendextend)
+library(tree)
+library(maptree)
+library(glmnet)
+library(arulesViz)
+library(class)
+library(randomForest)
+library(gbm)
+library(e1071)
+library(Metrics)
+
+
+options(scipen=999)
+```
+
+```{r, echo = F, message = F, warning = F}
+## read data and convert candidate names and party names from string to factor
+## we manually remove the variable "won", the indicator of county level winner
+## In Problem 5 we will reproduce this variable!
+election.raw <- read_csv("candidates_county.csv", col_names = TRUE) %>% 
+  mutate(candidate = as.factor(candidate), party = as.factor(party), won = NULL)
+
+## remove the word "County" from the county names
+words.to.remove = c("County")
+remove.words <- function(str, words.to.remove){
+  sapply(str, function(str){
+    x <- unlist(strsplit(str, " "))
+    x <- x[!x %in% words.to.remove]
+    return(paste(x, collapse = " "))
+  }, simplify = "array", USE.NAMES = FALSE)
+}
+election.raw$county <- remove.words(election.raw$county, words.to.remove)
+
+## read census data
+census <- read_csv("census_county.csv")
+```
+
+# <span style="color:blue">Question 1:</span>
+
+#### Dimensions of election.raw:
+```{r, echo = F}
+dim(election.raw)
+```
+
+#### How many NA values are in election.raw:
+```{r, echo = F}
+sum(is.na(election.raw))
+# There are no NA Values.
+```
+
+#### Number of unique states:
+```{r, echo = F}
+length(unique(election.raw$state))
+```
+
+The data contains 50 states and the District of Columbia.
+
+# <span style="color:blue">Question 2:</span>
+
+#### Dimensions of election.raw:
+```{r, echo = F}
+dim(census)
+```
+
+#### How many NA values in Census:
+```{r, echo = F}
+sum(is.na(census))
+# There is one NA Value.
+```
+
+#### Number of distinct counties in census:
+```{r, echo  = F}
+length(unique(census$CountyId))
+```
+
+#### Number of distinct counties in election.raw:
+```{r, echo = F}
+length(unique(election.raw$county))
+```
+
+There is a lower number of unique counties in election.raw than in the census dataset, which could mean that some counties were not included in the election.
+
+# <span style="color:blue">Question 3:</span>
+
+#### Display head of election.state:
+```{r, message = F, echo = F}
+election.state <- 
+  election.raw %>% 
+  group_by(state, candidate) %>%
+  summarise(n = sum(total_votes))
+head(election.state)
+```
+
+#### Display head of election.total:
+```{r, message = F, echo = F}
+election.total <-
+  election.raw %>% 
+  group_by(candidate) %>%
+  summarise(n = sum(total_votes))
+head(election.total)
+```
+
+# <span style="color:blue">Question 4:</span>
+
+#### Number of presidential candidates in the 2020 election:
+```{r}
+length(unique(election.raw$candidate))
+```
+
+#### Display Barchart for each Candidate's Total Votes:
+```{r, echo = F}
+#### Bar chart of all votes received by each candidate:
+
+p <- ggplot(data=election.total, aes(x=candidate, y=log(n))) +
+  geom_bar(stat="identity")
+p + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + ggtitle("Log-Scaled Votes For Each Candidate")
+```
+
+# <span style="color:blue">Question 5:</span>
+
+#### Display head of county.winner:
+```{r, warning = F, message = F, echo = F}
+#### Finding the County Winners Percentages
+county.winner <- election.raw %>% 
+  group_by(state, county, candidate) %>%
+  summarise(tot = sum(total_votes)) %>%
+  mutate(pct = tot / sum(tot)) %>%
+  top_n(1) %>%
+  select(county, candidate, pct, tot)
+
+county.winner <- county.winner %>% inner_join(unique(election.raw[c(3, 4)]), by = c('candidate' = 'candidate'))
+
+head(county.winner)
+```
+
+#### Display head of state.winner:
+```{r, warning = F, message = F, echo = F}
+#### Finding the State Winners Percentages
+state.winner <- election.raw %>%
+  group_by(state, candidate) %>%
+  summarise(tot = sum(total_votes)) %>%
+  mutate(pct = tot/sum(tot)) %>%
+  top_n(1) %>%
+  select(state, candidate, pct)
+
+head(state.winner)
+```
+
+# <span style="color:blue">Question 6:</span>
+
+#### Display Each County In the US
+```{r, warning = F, echo = F}
+counties = map_data("county")
+
+ggplot(data = counties) + 
+  geom_polygon(aes(x = long, y = lat, fill = subregion, group = group),
+               color = "white") + 
+  coord_fixed(1.3) +
+  guides(fill=FALSE)  # color legend is unnecessary and takes too long
+```
+
+# <span style="color:blue">Question 7:</span>
+
+#### Display the Colored Map of the Winner of Each State
+```{r, echo = F}
+states = map_data("state")
+
+state.winner$state <- tolower(state.winner$state)
+newstates <- states %>% left_join(state.winner, by = c("region"="state"))
+
+ggplot(data = newstates) + 
+  geom_polygon(aes(x = long, y = lat, fill = candidate, group = group),
+               color = "white") + 
+  coord_fixed(1.3) +
+  guides(fill=FALSE)  # color legend is unnecessary and takes too long
+```
+
+Biden is colored as light blue, while Trump is colored as red.
+
+# <span style="color:blue">Question 8:</span>
+
+#### Display the Colored Map of the Winner of Each California County
+```{r, warning = F, echo = F}
+counties <- map_data("county")
+ca_county <- subset(counties, region == "california")
+
+county.winner$county <- tolower(county.winner$county)
+
+newcounties <- 
+  ca_county %>% 
+  left_join(county.winner, by = c("subregion"="county"))
+
+ggplot(data = newcounties) + 
+  geom_polygon(aes(x = long, y = lat, fill = candidate, group = group),
+               color = "white") + 
+  coord_fixed(1.3) +
+  guides(fill=FALSE)  # color legend is unnecessary and takes too long
+```
+
+Biden represents the light blue, while Trump represents red.
+
+# <span style="color:blue">Question 9:</span>
+
+#### Displaying a Visual for the Census Data:
+```{r, warning = F, echo = F}
+mydata <- census[,-c(1:3, 19)]
+
+cormat <- round(cor(mydata),2)
+
+dd <- as.dist((1-cormat)/2)
+hc <- hclust(dd)
+cormat <-cormat[hc$order, hc$order]
+
+cormat[lower.tri(cormat)] <- NA
+melted_cormat <- melt(cormat)
+
+x <- ggplot(data = melted_cormat, aes(Var2, Var1, fill = value))+
+ geom_tile(color = "white") +
+ scale_fill_gradient2(low = "blue", high = "red", mid = "white", 
+   midpoint = 0, limit = c(-1,1), space = "Lab", 
+   name="Pearson\nCorrelation") +
+  theme_minimal() + 
+ theme(axis.text.x = element_text(angle = 50, vjust = 1.15, 
+    size = 5.5, hjust = 1.1), axis.text.y = element_text(size = 7))+
+ coord_fixed() 
+
+x + geom_text(aes(Var2, Var1, label = round(value, 1)), color = "black", size = 1.5) +
+theme(
+  axis.title.x = element_blank(),
+  axis.title.y = element_blank(),
+  legend.justification = c(1, 0),
+  legend.position = c(0.6, 0.7),
+  legend.direction = "horizontal")+
+  guides(guides = 'none', fill = guide_colorbar(barwidth = 7, barheight = 1,
+                title.position = "top", title.hjust = 0.5)) +
+  ggtitle('Correlation Heatmap of Census Dataset')
+```
+
+# <span style="color:blue">Question 10:</span>
+
+#### Display the First 5 Rows of census.clean:
+```{r, echo = F}
+census.clean <- 
+  census %>% 
+  drop_na() %>% 
+  mutate(Men = Men/TotalPop, Employed = Employed/TotalPop, VotingAgeCitizen = VotingAgeCitizen/TotalPop, Minority = Hispanic + Black + Native + Asian + Pacific) %>% 
+  select(-c(Hispanic, Black, Native, Asian, Pacific, IncomeErr, IncomePerCap, IncomePerCapErr, Walk, PublicWork, Construction))
+
+as.data.frame(census.clean[1:5,])
+```
+
+```{r, warning = F, echo = F}
+mydata <- as.data.frame(census.clean[,-c(1:3)])
+
+cormat <- round(cor(mydata),2)
+
+dd <- as.dist((1-cormat)/2)
+hc <- hclust(dd)
+cormat <-cormat[hc$order, hc$order]
+
+cormat[lower.tri(cormat)] <- NA
+melted_cormat <- melt(cormat)
+
+x <- ggplot(data = melted_cormat, aes(Var2, Var1, fill = value))+
+ geom_tile(color = "white") +
+ scale_fill_gradient2(low = "blue", high = "red", mid = "white", 
+   midpoint = 0, limit = c(-1,1), space = "Lab", 
+   name="Pearson\nCorrelation") +
+  theme_minimal() + 
+ theme(axis.text.x = element_text(angle = 50, vjust = 1.15, 
+    size = 5.5, hjust = 1.1), axis.text.y = element_text(size = 7))+
+ coord_fixed() 
+
+x + geom_text(aes(Var2, Var1, label = round(value, 1)), color = "black", size = 1.5) +
+theme(
+  axis.title.x = element_blank(),
+  axis.title.y = element_blank(),
+  legend.justification = c(1, 0),
+  legend.position = c(0.6, 0.7),
+  legend.direction = "horizontal")+
+  guides(guides = 'none', fill = guide_colorbar(barwidth = 7, barheight = 1,
+                title.position = "top", title.hjust = 0.5)) +
+  ggtitle('Correlation Heatmap of Census Dataset')
+```
+
+Using the correlation matrix, we see that we have one perfect colinearity between White and Minority. Therefore, we can take out the white variable.
+```{r, echo = F}
+census.clean <- census.clean[-7]
+```
+
+
+# <span style="color:blue">Question 11:</span>
+```{r, echo = F}
+# PCA process
+pr.out=prcomp(census.clean[,-c(2:3)], scale=TRUE)
+pc.county <- as.data.frame(pr.out$rotation[,c(1, 2)])
+```
+
+Mean of each column in census.clean
+```{r, eval = F, echo = F}
+# Finding the mean
+summary(census.clean)
+```
+
+Variance of each column in census.clean:
+```{r, eval = F, warning = F, echo = F}
+# Finding the variance
+apply(census.clean, 2, var)
+```
+
+I did both centering and scaling for PCA. In terms of centering, we should center because centering is required in order to perform PCA. In terms of scaling, Since most of the data points have vastly different means and variances, we can perform PCA with scaled values.
+
+Top 3 largest absolute values of PC1:
+```{r, message = F, echo = F}
+abs_pc.county <- abs(pc.county)
+abs_pc.county %>% 
+  arrange(desc(PC1)) %>% 
+  select(PC1) %>%
+  top_n(3)
+```
+
+Among the three variables, Poverty and ChildPoverty have a positive sign, while Employed is a negative sign. This means that Poverty and ChildPoverty are positively correlated with each other, while Employed is negatively correlated with Poverty and ChildPoverty. 
+
+# <span style="color:blue">Question 12:</span>
+```{r, echo = F}
+pr.var=pr.out$sdev^2
+pve=pr.var/sum(pr.var)
+cumsum(pve)
+```
+
+The minimum number of PCs needed to capture 90% of the variance for the analysis is 13.
+
+#### PVE Plot
+```{r, echo = F}
+plot(pve, xlab="Principal Component",
+ylab="Proportion of Variance Explained ", ylim=c(0,1),type='b')
+```
+
+#### Cumulative PVE Plot
+```{r, echo = F}
+plot(cumsum(pve), xlab="Principal Component ",
+ylab=" Cumulative Proportion of Variance Explained ", ylim=c(0,1), type='b')
+```
+
+# <span style="color:blue">Question 13:</span>
+
+#### Cluster for the census.clean dataset:
+```{r, echo = F}
+census.clean_scaled <- scale(census.clean[,-c(1:3)], center = T, scale = T)
+census.clean_dist <- dist(census.clean_scaled)
+census.hclust = hclust(census.clean_dist)
+
+census.clus = cutree(census.hclust, 10)
+barplot(table(census.clus))
+```
+
+#### Cluster for the first 2 PCs dataset
+```{r, echo = F}
+pc_dist <- dist(pr.out$x[,c(1,2)])
+pc.hclust = hclust(pc_dist)
+
+pc.clus = cutree(pc.hclust, 10)
+barplot(table(pc.clus))
+```
+
+Our census.clean cluster has 2 highly voted equal county winners, with not many candidates winning many counties. Our pc cluster, however, has 1 clear majority county winner, with a large gap between the others. However, 2 and 5 have a lot of county winners. Neither plots make very much sense, unless Trump and Biden won a similar amount of counties for the first plot or there was another candidate who won lots of counties in the second plot.
+
+#### Investigating Cluster containing SB County
+```{r}
+# Census cluster in SB county
+print(census.clus[228])
+
+# PC cluster in SB county
+print(pc.clus[228])
+```
+
+When we see the clustering, SB county is placed more appropriately in the census cluster since we mainly just want two clusters with a lot of observations since there were mainly just 2 candidates who won every county. So PC clustering wouldn't make much sense because there are more than 2 candidates winning each county.
+
+# <span style="color:blue">Question 14:</span>
+```{r, echo = F}
+# we move all state and county names into lower-case
+tmpwinner <- county.winner %>% ungroup %>%
+  mutate_at(vars(state, county), tolower)
+
+# we move all state and county names into lower-case
+# we further remove suffixes of "county" and "parish"
+tmpcensus <- census.clean %>% mutate_at(vars(State, County), tolower) %>%
+  mutate(County = gsub(" county|  parish", "", County)) 
+
+# we join the two datasets
+election.cl <- tmpwinner %>%
+  left_join(tmpcensus, by = c("state"="State", "county"="County")) %>% 
+  na.omit
+
+# drop levels of county winners if you haven't done so in previous parts
+election.cl$candidate <- droplevels(election.cl$candidate)
+
+# Save the election.cl dataset for question 20 and question 21
+election_21 <- election.cl[-c(1, 4, 5, 6, 7)]
+election.reg <- election.cl
+
+## save meta information
+election.meta <- election.cl %>% select(c(county, party, CountyId, state, tot, pct))
+
+## save predictors and class labels
+election.cl = election.cl %>% select(-c(county, party, CountyId, state, tot, pct))
+```
+
+We need to exclude the predictor party from election.cl since it's perfectly colinear with the candidate. The candidate and the party will always be the same relation no matter what. Therefore, it will not only be bad for our machine learning methods, but they are also redundant and take up computational time.
+
+```{r, echo = F}
+# Classification Given Code 
+
+#80% test 20% Training
+set.seed(10) 
+n <- nrow(election.cl)
+idx.tr <- sample.int(n, 0.8*n) 
+election.tr <- election.cl[idx.tr, ]
+election.te <- election.cl[-idx.tr, ]
+
+# Define 10 cross-validation folds:
+set.seed(20) 
+nfold <- 10
+folds <- sample(cut(1:nrow(election.tr), breaks=nfold, labels=FALSE))
+
+#following error rate function
+calc_error_rate = function(predicted.value, true.value){
+  return(mean(true.value!=predicted.value))
+}
+records = matrix(NA, nrow=3, ncol=2)
+colnames(records) = c("train.error","test.error")
+rownames(records) = c("tree","logistic","lasso")
+```
+
+
+
+# <span style="color:blue">Question 15:</span>
+```{r, echo = F}
+# Setting up tree and cross validation
+tree.election = tree(candidate~., data = election.tr)
+cv = cv.tree(tree.election, FUN=prune.misclass, K=folds)
+best.cv = min(cv$size[cv$dev == min(cv$dev)])
+```
+
+#### Visualizing pre-pruned tree
+```{r, echo = F}
+draw.tree(tree.election, nodeinfo=TRUE, cex = 0.4)
+title("Classification Tree Built on Training Set")
+```
+
+#### Visualizing the Pruned Tree
+```{r, echo = F}
+# Prune tree.carseats
+pt.cv = prune.misclass(tree.election, best=best.cv)
+# Plot pruned tree
+plot(pt.cv)
+text(pt.cv, pretty=0, col = "blue", cex = .5)
+title("Pruned tree of size 8")
+```
+
+```{r, echo = F}
+#### Training Error Rate
+tree.pred = predict(pt.cv, election.tr, type="class")
+records[1,1] <- calc_error_rate(tree.pred, election.tr$candidate)
+
+#### Test Error Rate
+tree.pred = predict(pt.cv, election.te, type="class")
+records[1,2] <- calc_error_rate(tree.pred, election.te$candidate)
+```
+
+Using the pruned plot, we get a similar error rate to the decision tree but with much smaller size and lesser overfitting. The pruned tree is also much easier to interpret.
+
+We get around a 6.6% train error rate (93.4 accuracy) and a 8.74% test error rate (91.26 accuracy) when we use the tree in predicting whether Trump or Biden wins a county. However, this accuracy score may be a little bit misleading because Trump has won at least 6 times as many counties as Biden. Therefore, if we predict all counties to have Trump as the winner, we would still get around an 85% accuracy score.
+
+Using the pruning plot, we see that minorities tend to vote for Biden, as we see than a minority rate of less than 48.85% leads to Trump winning given Transit rate is less than 0.95%, while minority greater than 53.15 leads to Biden winning given several conditions. We also see that transit best splits the data. Therefore, transit plays a big role in determining the winner of the county. This makes sense as urban populations with lots of transit rates tend to vote for Biden, while Trump gets lots of votes from rural/suburban areas. 
+
+# <span style="color:blue">Question 16:</span>
+```{r, warning = F, echo = F}
+glm.fit = glm(candidate ~., data=election.cl[idx.tr, ], family=binomial)
+prob.training = predict(glm.fit, election.cl[idx.tr, ], type="response")
+
+election.tr1 = election.tr %>%
+mutate(predCandidate=as.factor(ifelse(prob.training<=0.5, "Donald Trump", "Joe Biden")))
+
+records[2,1] <- calc_error_rate(election.tr1$predCandidate, election.tr1$candidate)
+
+```
+
+```{r, echo = F}
+prob.test = predict(glm.fit, election.te, type="response")
+
+election.te1 = election.te %>%
+mutate(predCandidate=as.factor(ifelse(prob.test<=0.5, "Donald Trump", "Joe Biden")))
+
+records[2,2] <- calc_error_rate(election.te1$predCandidate, election.te1$candidate)
+```
+
+
+```{r, echo = F}
+summary(glm.fit)
+```
+
+Significant variables (variables with p-value of less than 0.05) include VotingAgeCitizen, Professional, Service, Office, Production, Drive, Carpool, Transit, Employed, PrivateWork, FamilyWork, Unemployment, and Minority.
+
+These significant variables are consistent with what is shown in the tree, with common significant variables in VotingAgeCitizen, Professional, Service, Transit, PrivateWork, Unemployment, and Minority.
+
+* For every one unit change in VotingAgeCitizen, the log odds of the winner being Joe Biden increases by 16.028.
+* For every one unit change in Minority, the log odds of the winner being Joe Biden increases by 16.028.
+* For every one unit change in FamilyWork, the log odds of the winner being Biden decreases by -0.648.
+
+# <span style="color:blue">Question 17:</span>
+```{r, echo = F}
+# Set x and y train and tests
+x.train <- model.matrix(candidate~., election.tr)[,-1]
+y.train <- ifelse(election.tr$candidate=='Donald Trump',0,1)
+x.test <- model.matrix(candidate~., election.te)[,-1]
+y.test <- ifelse(election.te$candidate=='Donald Trump',0,1)
+x <- model.matrix(candidate~., election.cl)[,-1]
+y <- ifelse(election.cl$candidate=='Donald Trump',0,1)
+```
+
+#### Optimal lambda value in cross-validation
+```{r, echo = F}
+# Make the logistic regression lasso
+lasso.mod <- glmnet(x.train, y.train, alpha=1, lambda= seq(1, 50) * 1e-4, family = "binomial")
+
+# Set Cross validation minimum
+cv.out.lasso = cv.glmnet(x.train, y.train, alpha = 1, family = "binomial")
+bestlam = cv.out.lasso$lambda.min
+bestlam
+
+```
+
+#### Our Coefficients from LASSO
+```{r, echo = F}
+out = glmnet(x, y,alpha=1,lambda=seq(1, 50) * 1e-4, family='binomial')
+lasso.coef = predict(out,type="coefficients",s=bestlam)
+lasso.coef
+```
+
+The non-zero coefficients in the lasso regression include TOTALPOP, WOMEN, VotingAgeCitizen, POVERTY, Professional, Service, Office, Production, Drive, Carpool, Transit, Employed, PrivateWork, FamilyWork, Unemployment, and Minority. (Where variables not in caps are also in the unpenalized logistic regression)
+
+The lasso logistic regression's nonzero coefficients contains all of the unpenalized logistic regression variables that are statistical influencers on the outcome variable. 
+
+This means that lasso placed importance on these variables to influence the candidate winner and took out all the other variables that didn't have any statistical influence on the candidate winner. Thus, we keep all of the unpenalized logistic regression variables that are significant, but take out some variables that are not.
+
+```{r, echo = F}
+# Save Lasso
+train.pred = predict(lasso.mod, s = bestlam, newx = x.train, type="response")
+records[3,1] <- calc_error_rate(round(train.pred), y.train)
+
+# Test MSE
+lasso.pred = predict(lasso.mod, s = bestlam, newx = x.test, type="response")
+records[3,2] <- calc_error_rate(round(lasso.pred), y.test)
+
+```
+
+#### Final Records Table:
+```{r, echo = F}
+records
+```
+
+
+# <span style="color:blue">Question 18:</span>
+```{r, echo = F}
+# For the tree:
+library(ROCR)
+
+pred.tree = prediction(ifelse(tree.pred == 'Donald Trump', 1, 0), ifelse(election.te$candidate == 'Donald Trump', 1, 0))
+
+perf.tree = performance(pred.tree, measure="tpr", x.measure="fpr")
+
+plot(perf.tree, col=2, lwd=3, main="ROC curve")
+abline(0,1)
+
+par(new=TRUE)
+
+# Adding in the logistic
+pred.log = prediction(prob.test, ifelse(election.te$candidate == 'Donald Trump', 0, 1))
+
+perf.log = performance(pred.log, measure="tpr", x.measure="fpr")
+
+plot(perf.log, col=3, lwd=3)
+
+par(new=TRUE)
+
+# Adding in the LASSO
+pred.lasso = prediction(lasso.pred, ifelse(election.te$candidate == 'Donald Trump', 0, 1))
+
+perf.lasso = performance(pred.lasso, measure="tpr", x.measure="fpr")
+
+plot(perf.lasso, col=1, lwd=3)
+
+```
+
+The RED is for the tree, GREEN is for the unpenalized logistic regression, and the BLACK is the logistic regression using LASSO.
+
+Based on the results, we can see that the logistic and lasso regression showed much better performance. On the other hand, the tree did not perform as well. However, the logistic regression is much less interpretable than the tree, since for the tree, we have our splits of our variables which determine their importance and also the threshold at which they split. This gives the reader a better idea of how each variable influences the outcome variable. The tree is also more prone to overfitting. The tree can be trained on a small training dataset while the logistic regression requires a large dataset to work well. 
+
+The KNN classifier is not as appropriate as logistic regression since KNN doesn't work with large datasets and it suffers from the curse of dimensionality where there are too many predictor variables. LDA and QDA are not appropriate since it has to assume that the observations follows a normal distribution, which it doesn't. SVM does seem appropriate as there isn't any cons to using SVM in this dataset with the exception that SVM performs well on high dimensional but small observational data, but logistic regression using LASSO so far is the most accurate thus the most appropriate way. 
+
+```{r, echo = F, eval = F, warning = F}
+apply(election.cl, 2, var)
+```
+
+Also, some of our features have very high variance which means we have noisy features in our dataset, thus SVM and boosting would not work very well as they cannot handle noisy data very well.
+
+# <span style="color:blue">Question 19:</span>
+
+#### We will first try to use KNN CV to predict each county winner.
+```{r, echo = F}
+XTrain <- x.train
+YTrain <- y.train
+XTest <- x.test
+YTest <- y.test
+
+# do.chunk() for k-fold Cross-validation
+do.chunk <- function(chunkid, folddef, Xdat, Ydat, ...){
+# Get training index
+train = (folddef!=chunkid)
+# Get training set by the above index
+Xtr = Xdat[train,]
+# Get responses in training set
+Ytr = Ydat[train]
+# Get validation set
+Xvl = Xdat[!train,]
+# Get responses in validation set
+Yvl = Ydat[!train]
+# Predict training labels
+predYtr = knn(train=Xtr, test=Xtr, cl=Ytr, ...)
+# Predict validation labels
+predYvl = knn(train=Xtr, test=Xvl, cl=Ytr, ...)
+data.frame(fold = chunkid,
+train.error = mean(predYtr != Ytr), # Training error for each fold
+val.error = mean(predYvl != Yvl)) # Validation error for each fold
+}
+```
+
+```{r, warning = F, echo = F, cache = T}
+error.folds = NULL
+allK = 1:50
+
+for (k in allK){
+for (j in seq(3)){
+tmp = do.chunk(chunkid=j, folddef=folds, Xdat=XTrain, Ydat=YTrain, k=k)
+tmp$neighbors = k
+error.folds = rbind(error.folds, tmp)
+}
+}
+
+errors = melt(error.folds, id.vars=c('fold', 'neighbors'), value.name='error')
+
+val.error.means = errors %>%
+  
+filter(variable=='val.error') %>%
+  
+group_by(neighbors, variable) %>%
+  
+summarise_each(funs(mean), error) %>%
+
+ungroup() %>%
+filter(error==min(error))
+
+numneighbor = max(val.error.means$neighbors)
+
+pred.YTest = knn(train=XTrain, test=XTest, cl=YTrain, k=numneighbor)
+
+calc_error_rate(predicted=pred.YTest, true=YTest)
+```
+
+We get 0.15 as the error rate for our cv knn model. This performed poorly in comparison to the previous tree/lasso/logistic models we used.
+
+#### For our 2nd Classification method, we will use Random Forests
+```{r, echo = F, cache = T}
+rf.election = randomForest(candidate ~ ., data=election.tr, importance=TRUE)
+yhat.rf = predict(rf.election, newdata = election.te)
+calc_error_rate(predicted=yhat.rf, true=election.te$candidate)
+```
+
+For our random forest, we get around a 7% error rate, which isn't as bad as the tree/lasso/logistic, but not the best method to find the lowest error rate.
+
+#### For our 3rd Classification method, we will use Boosting
+```{r, echo = F, cache = T}
+boost.election = gbm(ifelse(candidate=="Donald Trump",0,1)~., data=election.tr, distribution="bernoulli", n.trees=500, interaction.depth=3)
+yhat.boost = predict(boost.election, newdata = election.te, n.trees=500, type = "response")
+yhat.boost = ifelse(yhat.boost < 0.5, 0, 1)
+
+calc_error_rate(yhat.boost, ifelse(election.te$candidate=="Donald Trump",0,1))
+```
+
+Similar to the random forest, our boosting gets us around 7% error rate.
+
+#### For our 4th Classification method, we will use SVM
+```{r, echo = F, cache = T}
+tune.out=tune(svm,candidate~.,data=election.tr,kernel="linear",
+              ranges=list(cost=c(0.001, 0.01, 0.1, 1, 5, 10, 100)))
+bestmod=tune.out$best.model
+
+ypred=predict(bestmod,election.te)
+calc_error_rate(ypred, election.te$candidate)
+```
+
+SVM also gets us around 7% error rate
+
+In conclusion, LASSO has the lowest error rate out of all our 7 machine learning models we used. 
+
+# <span style="color:blue">Question 20:</span>
+
+#### We will first try to predict the number of total votes for each winner candidate using Lasso Linear Regression
+
+#### MAE for lasso linear regression
+```{r, echo = F, warning = F, cache = T}
+set.seed(10) 
+grid = seq(1, 50) * 1e-4
+
+# election.reg
+reg <- election.reg[-c(1, 2, 3, 4, 6, 7)]
+n <- nrow(reg)
+idx.tr <- sample.int(n, 0.8*n) 
+reg.tr <- reg[idx.tr, ]
+reg.te <- reg[-idx.tr, ]
+
+# Turn training and test datasets to reflect on votes
+x.train_reg <- model.matrix(tot~., reg.tr)[,-1]
+y.train_reg <- reg.tr[[1]]
+
+x.test_reg <- model.matrix(tot~., reg.te)[,-1]
+y.test_reg <- reg.te[[1]]
+
+lasso_reg.mod <- glmnet(x.train_reg, y.train_reg, alpha=1, lambda=grid)
+cv.out.lasso_reg = cv.glmnet(x.train, y.train, alpha = 1)
+bestlam_reg = cv.out.lasso_reg$lambda.min
+lasso_reg.pred = predict(lasso_reg.mod, s = bestlam, newx = x.test_reg)
+mae(lasso_reg.pred,y.test_reg)
+```
+
+Our mae isn't too bad as it's saying we're on average around 6,779 people off from the actual count of how many each county winner got. We can run this on our test dataset including some counties to see how they compare.
+
+```{r, cache = T}
+predictions <- round(predict(lasso_reg.mod, s = bestlam, newx = model.matrix(tot~., reg.te)[,-1]))
+
+a <- cbind(election.reg[-idx.tr, ], predictions) %>% select(state, county, candidate, tot, s1)
+a[c(1:10),]
+```
+
+It looks like our predictions aren't too far off from the actual, with some weird, negative exceptions. This is completely different from the classification models since we're not trying to predict the winner (Trump or Biden), but rather a number predicting how many votes someone got if they won the county. This would be a pretty good analysis if you were a manager for a candidate and you wanted to predict how many votes you would need to win a certain county (If elections were based on the winners of a county) in order to win the county as cost efficient and time efficient as possible. 
+
+# <span style="color:blue">Question 21:</span>
+
+One thing that really confused me was the clustering part of our question. When I looked back on the dimension reduction, I felt like neither method (census clustering vs pca clustering) really worked, since Trump won a majority of counties, but no one else really won except for Trump, Biden or a few write-ins. Therefore, a barplot of the clustering should look like a lot of votes for one candidate, a moderate amount of votes for one candidate, and hardly any votes for the 3rd candidate, but both our barplots did not achieve this result.
+
+We can visualize how our data ended up by classifying how our clusters performed. However, we must redo our cluster on our election.cl dataset instead of census.clean to successfully run our code (results changed but we should still see a similar pattern)
+
+#### We can find how many clusters labeled as 1 belong to Trump and 2 to Biden to measure how many the clusters correctly predicted Trump or Biden
+
+#### For Trump:
+```{r, echo = F}
+set.seed(10)
+
+census.clean_scaled <- scale(election_21[,-c(1:2)], center = T, scale = T)
+census.clean_dist <- dist(census.clean_scaled)
+census.hclust = hclust(census.clean_dist)
+census.clus = cutree(census.hclust, 10)
+
+applying <- function(x){
+  if (x == 1){
+    x <- 'Donald Trump'
+  }
+  else if (x == 2){
+    x <- 'Joe Biden'
+  }
+  else{
+    x <- 'Other'
+  }
+}
+
+# Join the two datasets to compare the real candidate vs predicted candidate from census.clus
+census.pred <- cbind(election_21, census.clus) %>% select(county, candidate, census.clus)
+
+# Turn cluster number into Trump or Biden
+census.pred$census.clus <- sapply(census.pred$census.clus, applying)
+
+# Check accuracy for each candidate
+Trump <- census.pred %>% filter(candidate == 'Donald Trump')
+mean(Trump$candidate == Trump$census.clus)
+```
+
+The unsupervised clustering has correctly predicted that Trump was the winner 74% of the time.
+
+#### For Biden:
+```{r, echo = F}
+Biden <- census.pred %>% filter(candidate == 'Joe Biden')
+mean(Biden$candidate == Biden$census.clus)
+```
+
+However, the unsupervised clustering correctly predicted Biden was the winner 26% of the time.
+
+#### Overall Accuracy Score
+```{r, echo = F}
+A <- (census.pred$candidate == 'Donald Trump' & census.pred$census.clus == 'Donald Trump') | (census.pred$candidate == 'Joe Biden' & census.pred$census.clus == 'Joe Biden')
+mean(A)
+```
+
+#### Now, we try the same thing with the PCA. Here we have majority labeled as '1' and 2nd most as '7' so we will set Trump according to 1 and Biden to 7.
+
+#### Trump Accuracy Score
+```{r, echo = F}
+set.seed(10)
+
+pr.out=prcomp(election_21[,-c(1:2)], scale=TRUE)
+pc_dist <- dist(pr.out$x[,c(1,2)])
+pc.hclust = hclust(pc_dist)
+
+pc.clus = cutree(pc.hclust, 10)
+
+applying1 <- function(x){
+  if (x == 1){
+    x <- 'Donald Trump'
+  }
+  else if (x == 7){
+    x <- 'Joe Biden'
+  }
+  else{
+    x <- 'Other'
+  }
+}
+
+# Join the two datasets to compare the real candidate vs predicted candidate from pc.clus
+pc.pred1 <- cbind(election_21, pc.clus) %>% select(county, candidate, pc.clus)
+
+# Turn cluster number into Trump or Biden
+pc.pred1$pc.clus <- sapply(pc.pred1$pc.clus, applying1)
+
+Trump <- pc.pred1 %>% filter(candidate == 'Donald Trump')
+mean(Trump$candidate == Trump$pc.clus)
+```
+
+The unsupervised PCA has correctly predicted that Trump was the winner 60% of the time.
+
+#### Biden Accuracy Score
+```{r, echo = F}
+Biden <- pc.pred1 %>% filter(candidate == 'Joe Biden')
+mean(Biden$candidate == Biden$pc.clus)
+```
+
+The unsupervised PCA has correctly predicted that Trump was the winner 23% of the time.
+
+#### Overall Accuracy Score
+```{r, echo = F}
+B <- (pc.pred1$candidate == 'Donald Trump' & pc.pred1$pc.clus == 'Donald Trump') | (pc.pred1$candidate == 'Joe Biden' & pc.pred1$pc.clus == 'Joe Biden')
+mean(B)
+```
+
+PCA Overall accuracy has a significant lower accuracy score than the census. Thus, despite lowering the amount of dimensions, it is not worth having a much lower accuracy score.
+
+In conclusion, it's a bit hard to predict on this dataset because most of the dataset have the county winner as Trump. If we're getting such a low accuracy score for Biden, the clustering method is essentially just making guesses. 
+
+If we have a dataset that has an equal outcome split, we can more accurately determine which model or clustering method works best, albeit getting a lower accuracy score. If we consider that Trump has won a majority of the counties in general, our clustering accuracy score tells us that both the PCA and regular features are technically guessing and it isn't really appropriate to use this method for both.
+
