@@ -1,8 +1,6 @@
 ---
 title: "Final Project 131"
-output:
-  pdf_document: default
-  html_document: default
+output: github_document
 date: "2022-11-27"
 ---
 ```{r, echo = F, message = F, warning = F}
